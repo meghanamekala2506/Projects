@@ -1,0 +1,399 @@
+---
+title: "NVIDIA Forecasting"
+output: html_notebook
+---
+# Time Series Analysis Group Project
+## Team members:
+### Meghana Mekala
+### Jiayi HUANG
+### Guan-Yu Shen
+### Juan José Sarmiento
+### Miguel Ángel Castellanos
+
+# 1. Data Cleaning and Time Series Preparation
+
+## 1.1. Load libraries
+```{r}
+library(quantmod)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tseries)
+```
+
+## 1.2. Get NVIDIA data and clean
+```{r}
+# Define stock symbol and date range
+symbol <- "NVDA"
+start_date <- as.Date("2015-01-01")
+end_date <- as.Date("2025-01-01")
+
+# Get data from Yahoo Finance
+getSymbols(symbol, src = "yahoo", from = start_date, to = end_date, periodicity="monthly")
+
+# Convert to dataframe and clean
+nvda_data <- data.frame(Date = index(NVDA), coredata(NVDA)) %>%
+  select(Date, Adjusted = NVDA.Adjusted) %>%  
+
+# Keep only Date & Adjusted Close
+drop_na()  # Remove any missing values
+
+# Ensure proper date format
+nvda_data$Date <- as.Date(nvda_data$Date)
+
+```
+## 1.3. Convert to time series and visualize
+```{r}
+# Convert to time series object
+nvda_ts <- ts(nvda_data$Adjusted, start = c(2015, 1), frequency = 12) # 12 months
+
+# Plot adjusted close price
+ggplot(nvda_data, aes(x = Date, y = Adjusted)) +
+  geom_line(color = "blue") +
+  ggtitle("NVIDIA Stock Price (2015-2025)") +
+  xlab("Year") + ylab("Adjusted Close Price") +
+  theme_minimal()
+```
+# 2. Choice of Forecasting Model 
+```{r}
+# Check time series structure
+print(nvda_ts)
+```
+# 2.1. Check for Stationarity (ADF & KPSS Tests)
+## We check if the NVIDIA stock price time series is stationary
+```{r}
+# Augmented Dickey-Fuller (ADF) Test
+adf_test <- adf.test(nvda_ts)
+print(adf_test)
+
+# KPSS Test
+kpss_test <- kpss.test(nvda_ts)
+print(kpss_test)
+
+# First differencing
+nvda_diff <- diff(nvda_ts)
+
+# Remove NA values from differenced series
+nvda_diff <- na.omit(nvda_diff)
+
+# Augmented Dickey-Fuller (ADF) Test after differencing
+adf_test_diff <- adf.test(nvda_diff)
+print(adf_test_diff)
+
+# KPSS Test after differencing
+kpss_test_diff <- kpss.test(nvda_diff)
+print(kpss_test_diff)
+```
+### If ADF p-value < 0.05, the series is stationary.
+
+### If KPSS p-value > 0.05, the series is stationary.
+
+### If not stationary, differencing is applied.
+
+#-------------------------------------------------#
+
+# 2.2. Check Trend & Seasonality
+## Use Autocorrelation (ACF) and Partial Autocorrelation (PACF) plots to detect patterns.
+```{r}
+# ACF & PACF plots
+acf(nvda_ts, main="Autocorrelation (ACF) of NVDA Stock")
+pacf(nvda_ts, main="Partial Autocorrelation (PACF) of NVDA Stock")
+
+# Decompose using STL (Seasonal-Trend Decomposition)
+nvda_decomposed <- stl(nvda_ts, s.window = "periodic")
+
+# Seasonal decomposition plot 
+plot(nvda_decomposed)
+```
+# Moving Average Model
+```{r}
+# Moving Average (window = 10 months)
+nvda_ma <- ma(nvda_ts, order = 10)
+
+# Plot Moving Average
+plot(nvda_ts, main="NVIDIA Stock Price with Moving Average", col="blue", lwd=2)
+lines(nvda_ma, col="red", lwd=2)
+legend("topleft", legend=c("Actual", "Moving Average"), col=c("blue", "red"), lty=1)
+```
+# Linear Regression Model
+## Used when a linear trend is detected.
+```{r}
+# Convert to dataframe for regression
+nvda_data$Index <- 1:nrow(nvda_data)
+
+# Fit Linear Model
+lm_model <- lm(Adjusted ~ Index, data=nvda_data)
+
+# Predict values
+nvda_data$lm_fitted <- predict(lm_model)
+
+# Plot
+ggplot(nvda_data, aes(x = Date)) +
+  geom_line(aes(y = Adjusted), color = "blue") +
+  geom_line(aes(y = lm_fitted), color = "red") +
+  ggtitle("Linear Regression Forecast") +
+  xlab("Year") + ylab("Stock Price")
+```
+# ETS Models
+## ETS Simple 
+### Use when not trend and not seasonality
+```{r}
+ets_simple <- ets(nvda_ts, model="ANN")  # Simple exponential smoothing
+plot(forecast(ets_simple), main="ETS Simple Model")
+```
+
+## ETS Holt (Trend)
+### Use when trend and not seasonality
+```{r}
+ets_holt <- ets(nvda_ts, model="AAN")  # Holt’s linear trend method
+plot(forecast(ets_holt), main="ETS Holt Model")
+```
+
+## ETS Holt-Winters (Additive)
+### Use when trend and seasonality 
+```{r}
+ets_hw_add <- ets(nvda_ts, model="AAA")  # Additive seasonality
+plot(forecast(ets_hw_add), main="ETS Holt-Winters Additive")
+```
+
+## ETS Holt-Winters (Multiplicative)
+### Use when trend and seasonality
+```{r}
+ets_hw_mult <- ets(nvda_ts, model="MAM")  # Multiplicative seasonality
+plot(forecast(ets_hw_mult), main="ETS Holt-Winters Multiplicative")
+```
+# ARIMA Model
+## If stationarity is achieved, fit ARIMA
+```{r}
+# Auto ARIMA model selection
+arima_model <- auto.arima(nvda_ts)
+
+# Forecast
+arima_forecast <- forecast(arima_model, h=30)  # 30 months forecast
+
+# Plot ARIMA Forecast
+plot(arima_forecast, main="ARIMA Forecast")
+```
+# Model Evaluation
+## Compare models using RMSE, AIC, BIC
+```{r}
+# Function to calculate RMSE
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2, na.rm=TRUE))
+}
+
+# Compute RMSE
+rmse_ma <- rmse(nvda_ts, nvda_ma)
+rmse_lm <- rmse(nvda_ts, nvda_data$lm_fitted)
+rmse_ets_simple <- rmse(nvda_ts, fitted(ets_simple))
+rmse_ets_holt <- rmse(nvda_ts, fitted(ets_holt))
+rmse_ets_hw_add <- rmse(nvda_ts, fitted(ets_hw_add))
+rmse_ets_hw_mult <- rmse(nvda_ts, fitted(ets_hw_mult))
+rmse_arima <- rmse(nvda_ts, fitted(arima_model))
+
+# Compute AIC & BIC
+aic_values <- c(AIC(ets_simple), AIC(ets_holt), AIC(ets_hw_add), AIC(ets_hw_mult), AIC(arima_model))
+bic_values <- c(BIC(ets_simple), BIC(ets_holt), BIC(ets_hw_add), BIC(ets_hw_mult), BIC(arima_model))
+
+# Compare Results
+model_comparison <- data.frame(
+  Model = c("Moving Average", "Linear Regression", "ETS Simple", "ETS Holt", "ETS Holt-Winters Add", "ETS Holt-Winters Mult", "ARIMA"),
+  RMSE = c(rmse_ma, rmse_lm, rmse_ets_simple, rmse_ets_holt, rmse_ets_hw_add, rmse_ets_hw_mult, rmse_arima),
+  AIC = c(NA, NA, AIC(ets_simple), AIC(ets_holt), AIC(ets_hw_add), AIC(ets_hw_mult), AIC(arima_model)),
+  BIC = c(NA, NA, BIC(ets_simple), BIC(ets_holt), BIC(ets_hw_add), BIC(ets_hw_mult), BIC(arima_model))
+)
+
+# Print model comparison
+print(model_comparison)
+```
+## Choose the model with the lowest RMSE, AIC, and BIC.
+
+### If the data is stationary, ARIMA is often a strong choice.
+
+### If the data has seasonality, ETS Holt-Winters might be better.
+
+### If there’s a linear trend, Linear Regression or Holt’s method can work well.
+
+In this case, although the autoArima provided nearby values, the best model for this dataset is the ETS Holt - Winters Multiplicative, since it provides the lower values of both the Akaike test and the Bayes, meaning that this model better fits the data and the RMSE applied to all the data is the second lowest behind Moving Average which is understandable because of the lagged nature of this measure.
+
+#Select the best models to train and test, generating forecast
+##Set training and test splitting parametres
+```{r}
+# Define forecast horizon (30 months to match the graphs)
+h = 30  
+# Get total length of the time series
+n = length(nvda_ts)  
+
+# Define training set range
+train.end = time(nvda_ts)[n-h]  # Training set ends before the last 30 months
+train.start = time(nvda_ts)[1]  # Training set starts from the beginning
+```
+
+## Create training and test sets
+
+```{r}
+#Adjusting the training and test sets to match the parametres
+nvda.train = window(nvda_ts, end = train.end)
+nvda.test = window(nvda_ts, start = train.end + 1/12)  # Monthly data adjustment
+```
+
+## Check if training and test sets sum up correctly
+```{r}
+
+length(nvda.train) + length(nvda.test) == n
+```
+
+## Create forecast and RMSE results for ARIMA model
+```{r}
+### Model 1: ARIMA ###
+fit1 = auto.arima(nvda.train)  # Automatically selects best ARIMA model
+pred.arima = forecast(fit1, h=h)
+for.arima = pred.arima$mean  # Extract ARIMA forecast
+rmse.arima = rmse(nvda.test, for.arima)  # Compute RMSE
+```
+
+## Create forecast and RMSE results for ETS Holt-Winters Mult
+
+```{r}
+fit2 = HoltWinters(nvda.train, seasonal = "multiplicative")  # Fit Holt-Winters model
+pred.hw = forecast(fit2, h=h)  
+for.hw = pred.hw$mean  # Extract Holt-Winters forecast
+rmse.hw = rmse(nvda.test, for.hw)  # Compute RMSE
+```
+
+## Compare the best 2 models RMSE on the forecasted values vs real data
+
+```{r}
+### RMSE Comparison Table
+comparison = data.frame(
+  Model = c("ARIMA", "Holt-Winters Multiplicative"),
+  RMSE = c(rmse.arima, rmse.hw)
+)
+
+print(comparison)
+```
+
+## Conclusion
+
+Keeping consistent with the initial tests on RMSE, the best model to further use is the ETS-Holt Winters Multiplicative. As it provides lower values of error in the forecast on test data against the second best (ARIMA)
+
+#### Business Insights
+
+### Forecasting Model Comparison for NVIDIA Stock Prices
+
+The table below summarizes the performance metrics of various forecasting models based on RMSE (Root Mean Square Error), AIC (Akaike Information Criterion), and BIC (Bayesian Information Criterion).
+
+Model	            RMSE (Lower = Better Fit)	   AIC (Lower = Less Complexity)	  BIC (Lower = Less Complexity)	   Interpretation
+Moving Average	  3.428	                       N/A	                              N/A	                           Smooths out fluctuations but lacks predictive power.
+Linear Regression	22.068	                     N/A	                              N/A	                           Poor fit due to high RMSE; unsuitable for stock price forecasting.
+ETS Simple	      4.238	                       927.11	                            935.47	                       Basic exponential smoothing; does not capture trend well.
+ETS Holt (Trend)	3.877	                       909.73	                            923.67	                       Accounts for trend but lacks seasonal adjustments.
+ETS Holt-Winters Additive	3.601	               915.98	                            963.37	                       Captures trend and seasonality (good, but higher BIC).
+ETS Holt-Winters Multiplicative	3.518	         615.09	                            665.27	                       Best ETS model – handles both trend & seasonality well.
+ARIMA	3.585	                                   652.20	                            666.05	                       Best overall model – balances error and complexity.
+
+# Load necessary libraries
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Create a dataframe for model comparison
+model_comparison <- tibble(
+  Model = c("Moving Average", "Linear Regression", "ETS Simple", "ETS Holt", 
+            "ETS Holt-Winters Add", "ETS Holt-Winters Mult", "ARIMA"),
+  RMSE = c(3.428067, 22.068696, 4.238516, 3.877222, 3.600876, 3.517760, 3.585108),
+  AIC = c(NA, NA, 927.1102, 909.7276, 915.9815, 615.0931, 652.1978),
+  BIC = c(NA, NA, 935.4727, 923.6650, 963.3689, 665.2680, 666.0512)
+)
+
+# Convert dataframe to long format using tidyr::pivot_longer()
+model_comparison_long <- model_comparison %>%
+  pivot_longer(cols = c(RMSE, AIC, BIC), names_to = "Metric", values_to = "Value")
+
+# Plot RMSE Comparison
+ggplot(model_comparison_long %>% filter(Metric == "RMSE"), aes(x = reorder(Model, Value), y = Value, fill = Model)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "RMSE Comparison of Forecasting Models", x = "Model", y = "RMSE Value") +
+  theme_minimal()
+
+# Plot AIC Comparison
+ggplot(model_comparison_long %>% filter(Metric == "AIC" & !is.na(Value)), aes(x = reorder(Model, Value), y = Value, fill = Model)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "AIC Comparison of Forecasting Models", x = "Model", y = "AIC Value") +
+  theme_minimal()
+
+# Plot BIC Comparison
+ggplot(model_comparison_long %>% filter(Metric == "BIC" & !is.na(Value)), aes(x = reorder(Model, Value), y = Value, fill = Model)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  coord_flip() +
+  labs(title = "BIC Comparison of Forecasting Models", x = "Model", y = "BIC Value") +
+  theme_minimal()
+
+
+### Key Insights from Model Evaluation
+Best Forecasting Model: ETS Holt-Winters Multiplicative
+
+Lowest RMSE (3.518) → Best predictive accuracy.
+
+Lowest AIC (615.09) and BIC (665.27) → Best balance of complexity and fit.
+
+Captures trend and seasonal fluctuations, making it ideal for stock forecasting.
+
+## ARIMA as an Alternative Model: 
+
+Slightly higher RMSE (3.585) but still competitive.
+
+AIC (652.20) and BIC (666.05) suggest it is more complex than Holt-Winters.
+
+Works well for short-term forecasting and stable trends but less effective for seasonality.
+
+## Worst Performing Models: 
+
+Linear Regression (22.07 RMSE) → Fails to model stock price fluctuations.
+
+Moving Average (3.42 RMSE) → Smooths fluctuations but lacks forecasting strength.
+
+## Insights from the Comparison: 
+
+# RMSE (Root Mean Square Error) Comparison:
+
+ETS Holt-Winters Multiplicative (3.518) has the lowest RMSE, making it the best-performing model in terms of accuracy.
+
+ETS Holt (3.877) and ARIMA (3.585) also perform well but are slightly behind.
+
+Linear Regression (22.068) has the worst RMSE, indicating poor predictive accuracy.
+
+## AIC (Akaike Information Criterion) Comparison:
+
+ETS Holt-Winters Multiplicative (615.09) has the lowest AIC, indicating it fits the data best while minimizing complexity.
+
+ARIMA (652.20) and ETS Holt (909.73) follow but are not as optimal.
+
+## BIC (Bayesian Information Criterion) Comparison:
+
+Again, ETS Holt-Winters Multiplicative (665.27) has the lowest BIC, confirming its strong fit.
+
+ARIMA (666.05) is close behind but slightly worse.
+
+## Final Business Recommendation:
+
+The ETS Holt-Winters Multiplicative model is the best choice for NVIDIA stock forecasting because it has:
+
+The lowest RMSE (most accurate predictions).
+
+The lowest AIC & BIC (best balance between model fit and complexity).
+
+It captures both trend and seasonality, which aligns with real-world financial data.
+
+ARIMA can be considered as an alternative but performs slightly worse in this case.
+
+
+
+
+
+
+
+
